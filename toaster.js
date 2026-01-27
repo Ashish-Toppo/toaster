@@ -1,11 +1,14 @@
-/**
- * Toaster - The plug-and-play notification engine
- * Usage: Toaster.success("Message", "optional_url")
- *        Toaster.error("Message");
- */
 class Toaster {
-    static redirectTimer = null;
-    static textInterval = null;
+    // --- CONTROL PANEL ---
+    static SETTINGS = {
+        REDIRECT_MS: 3000,
+        STAY_CONFIRM_MS: 2000,
+        AUTO_CLOSE_MS: 4000,
+        FADE_MS: 300,
+        COUNTDOWN_START: 3
+    };
+
+    static _container = null;
 
     static success(message, redirectUrl = null) {
         this._pop('success', message, redirectUrl);
@@ -15,121 +18,188 @@ class Toaster {
         this._pop('error', message);
     }
 
-    static _pop(type, message, redirectUrl = null) {
-        this._eject();
-
-        const isSuccess = type === 'success';
-        const themeColor = isSuccess ? '#10b981' : '#ef4444'; // Emerald-500 : Red-500
-        const icon = isSuccess ? 'fa-check-circle' : 'fa-exclamation-circle';
-        
-        const toast = document.createElement('div');
-        toast.className = `toaster-toast toast-${type}`;
-        
-        const progressId = `toast-bar-${Math.random().toString(36).substr(2, 5)}`;
-        
-        toast.innerHTML = `
-            <div class="toaster-content">
-                <div class="toaster-body">
-                    <i class="fas ${icon} toaster-icon"></i>
-                    <div class="toaster-text">
-                        <p class="toaster-message">${message}</p>
-                        ${redirectUrl ? `<p class="toaster-subtext">Redirecting in <span id="toast-count">3</span>s...</p>` : ''}
-                    </div>
-                </div>
-                ${redirectUrl ? `
-                    <button id="toast-cancel" class="toaster-btn">
-                        Stay Here
-                    </button>
-                ` : ''}
-            </div>
-            <div id="${progressId}" class="toaster-progress-bar"></div>
-        `;
-
-        document.body.appendChild(toast);
-
-        // Animate progress bar
-        const bar = document.getElementById(progressId);
-        setTimeout(() => { bar.style.width = '0%'; }, 10);
-
-        if (redirectUrl) {
-            let timeLeft = 3;
-            const countEl = document.getElementById('toast-count');
-            this.textInterval = setInterval(() => {
-                timeLeft--;
-                if (countEl) countEl.textContent = timeLeft;
-                if (timeLeft <= 0) clearInterval(this.textInterval);
-            }, 1000);
-
-            this.redirectTimer = setTimeout(() => { window.location.href = redirectUrl; }, 3000);
-            toast.querySelector('#toast-cancel').addEventListener('click', () => this._cancel(toast));
-        } else {
-            setTimeout(() => this._coolDown(toast), 3000);
-        }
+    static _createContainer() {
+        if (this._container && document.body.contains(this._container)) return this._container;
+        this._container = document.createElement('div');
+        this._container.id = 'toaster-stack-container';
+        document.body.appendChild(this._container);
+        return this._container;
     }
 
-    static _cancel(toast) {
-        clearTimeout(this.redirectTimer);
-        clearInterval(this.textInterval);
+    static _pop(type, message, redirectUrl = null) {
+        const container = this._createContainer();
+        const isSuccess = type === 'success';
+        const toast = document.createElement('div');
         
-        toast.style.backgroundColor = '#2563eb'; // Blue-600
+        toast.className = `toaster-toast toaster-toast--${type}`;
+        toast._timers = []; 
+
         toast.innerHTML = `
             <div class="toaster-content">
                 <div class="toaster-body">
-                    <i class="fas fa-hand-paper toaster-icon"></i>
+                    <i class="fas ${isSuccess ? 'fa-check-circle' : 'fa-exclamation-circle'} toaster-icon"></i>
                     <div class="toaster-text">
-                        <p class="toaster-message">Redirect Cancelled</p>
-                        <p class="toaster-subtext">You're staying here!</p>
+                        <p class="toaster-message"></p>
+                        <p class="toaster-subtext" style="display:none"></p>
                     </div>
                 </div>
+                <div class="toaster-actions"></div>
+                <button class="toaster-close" aria-label="Close">&times;</button>
             </div>
+            <div class="toaster-progress-bar"></div>
         `;
-        setTimeout(() => this._coolDown(toast), 2000);
+
+        // Defensive/Secure Text Injection
+        const messageEl = toast.querySelector('.toaster-message');
+        if (messageEl) messageEl.textContent = message;
+
+        const bar = toast.querySelector('.toaster-progress-bar');
+
+        if (redirectUrl) {
+            const subtext = toast.querySelector('.toaster-subtext');
+            if (subtext) {
+                subtext.style.display = 'block';
+                subtext.innerHTML = `Redirecting in <span class="toast-count">${this.SETTINGS.COUNTDOWN_START}</span>s...`;
+            }
+            
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'toaster-btn toast-cancel-trigger';
+            cancelBtn.textContent = 'Stay Here';
+            
+            const actions = toast.querySelector('.toaster-actions');
+            if (actions) actions.appendChild(cancelBtn);
+
+            let timeLeft = this.SETTINGS.COUNTDOWN_START;
+            const countEl = toast.querySelector('.toast-count');
+            
+            const textInterval = setInterval(() => {
+                timeLeft--;
+                if (countEl) countEl.textContent = timeLeft;
+                if (timeLeft <= 0) clearInterval(textInterval);
+            }, 1000);
+            toast._timers.push(textInterval);
+
+            const redirectTimer = setTimeout(() => {
+                window.location.href = redirectUrl;
+            }, this.SETTINGS.REDIRECT_MS);
+            toast._timers.push(redirectTimer);
+
+            if (bar) bar.style.transitionDuration = `${this.SETTINGS.REDIRECT_MS}ms`;
+            
+            // DEFENSIVE GUARD: Ensure button exists before binding
+            if (cancelBtn) {
+                cancelBtn.onclick = () => this._toStayState(toast);
+            }
+        } else {
+            const expiryTimer = setTimeout(() => this._coolDown(toast), this.SETTINGS.AUTO_CLOSE_MS);
+            toast._timers.push(expiryTimer);
+            if (bar) bar.style.transitionDuration = `${this.SETTINGS.AUTO_CLOSE_MS}ms`;
+        }
+
+        container.prepend(toast);
+
+        // Deterministic Reflow
+        if (bar) {
+            bar.offsetWidth; 
+            bar.style.width = '0%';
+        }
+
+        const closeBtn = toast.querySelector('.toaster-close');
+        if (closeBtn) closeBtn.onclick = () => this._coolDown(toast);
+    }
+
+    static _toStayState(toast) {
+        this._clearInstanceTimers(toast);
+        
+        toast.style.backgroundColor = 'var(--toaster-cancel, #2563eb)';
+        
+        const bar = toast.querySelector('.toaster-progress-bar');
+        if (bar) bar.style.display = 'none';
+        
+        const msg = toast.querySelector('.toaster-message');
+        if (msg) msg.textContent = 'Redirect Cancelled';
+        
+        const sub = toast.querySelector('.toaster-subtext');
+        if (sub) {
+            sub.textContent = "You're staying here!";
+            sub.style.display = 'block';
+        }
+        
+        const actions = toast.querySelector('.toaster-actions');
+        if (actions) actions.innerHTML = '';
+        
+        const stayTimer = setTimeout(() => this._coolDown(toast), this.SETTINGS.STAY_CONFIRM_MS);
+        toast._timers.push(stayTimer);
+    }
+
+    static _clearInstanceTimers(toast) {
+        if (toast._timers) {
+            toast._timers.forEach(t => {
+                clearTimeout(t);
+                clearInterval(t);
+            });
+            toast._timers = [];
+        }
     }
 
     static _coolDown(toast) {
         if (!toast) return;
+        this._clearInstanceTimers(toast);
+
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(30px)';
-        setTimeout(() => toast.remove(), 300);
-    }
-
-    static _eject() {
-        document.querySelectorAll('.toaster-toast').forEach(t => t.remove());
-        clearTimeout(this.redirectTimer);
-        clearInterval(this.textInterval);
+        setTimeout(() => {
+            if (toast.parentNode) toast.remove();
+        }, this.SETTINGS.FADE_MS);
     }
 }
 
-// Inject CSS that replaces all Tailwind requirements
+// Injected Styles
 (function injectStyles() {
     if (document.getElementById('toaster-css')) return;
     const style = document.createElement('style');
     style.id = 'toaster-css';
     style.textContent = `
-        .toaster-toast {
-            position: fixed; top: 20px; right: 20px; min-width: 300px;
-            padding: 16px 24px; border-radius: 8px; color: white;
-            font-family: sans-serif; z-index: 9999; overflow: hidden;
-            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            animation: toaster-slide-in 0.3s ease-out;
+        :root {
+            --toaster-success: #10b981;
+            --toaster-error: #ef4444;
+            --toaster-cancel: #2563eb;
+            --toaster-text: #ffffff;
+            --toaster-width: 340px;
         }
-        .toast-success { background-color: #10b981; }
-        .toast-error { background-color: #ef4444; }
-        
-        .toaster-content { display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 10; }
-        .toaster-body { display: flex; align-items: center; gap: 12px; }
-        .toaster-icon { font-size: 1.25rem; }
+        #toaster-stack-container {
+            position: fixed; top: 20px; right: 20px;
+            display: flex; flex-direction: column;
+            gap: 12px; z-index: 9999; pointer-events: none;
+        }
+        .toaster-toast {
+            pointer-events: auto; min-width: var(--toaster-width); max-width: 450px;
+            padding: 16px 20px; border-radius: 8px; color: var(--toaster-text);
+            font-family: system-ui, -apple-system, sans-serif;
+            position: relative; overflow: hidden;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2);
+            transition: all ${Toaster.SETTINGS.FADE_MS}ms ease;
+            animation: toaster-slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .toaster-toast--success { background-color: var(--toaster-success); }
+        .toaster-toast--error { background-color: var(--toaster-error); }
+        .toaster-content { display: flex; align-items: center; justify-content: space-between; gap: 15px; position: relative; z-index: 10; }
+        .toaster-body { display: flex; align-items: center; gap: 12px; flex: 1; }
         .toaster-message { font-weight: 600; margin: 0; font-size: 0.95rem; }
-        .toaster-subtext { margin: 2px 0 0 0; font-size: 0.8rem; opacity: 0.9; }
-        
+        .toaster-subtext { margin: 0; font-size: 0.8rem; opacity: 0.9; }
         .toaster-btn {
-            background: none; border: none; color: white; text-decoration: underline;
-            font-size: 0.8rem; font-weight: 500; cursor: pointer; padding: 0; margin-left: 15px;
+            background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3);
+            color: var(--toaster-text); border-radius: 4px; padding: 4px 8px;
+            font-size: 0.75rem; cursor: pointer; white-space: nowrap; transition: background 0.2s;
+        }
+        .toaster-btn:hover { background: rgba(255,255,255,0.3); }
+        .toaster-close {
+            background: none; border: none; color: var(--toaster-text); font-size: 1.25rem;
+            cursor: pointer; opacity: 0.7; padding: 0 0 0 5px; line-height: 1;
         }
         .toaster-progress-bar {
-            position: absolute; bottom: 0; left: 0; height: 4px; width: 100%;
-            background-color: rgba(255,255,255,0.4); transition: width 3s linear;
+            position: absolute; bottom: 0; left: 0; height: 3px; width: 100%;
+            background-color: rgba(255,255,255,0.5); transition-property: width; transition-timing-function: linear;
         }
         @keyframes toaster-slide-in {
             from { transform: translateX(100%); opacity: 0; }
