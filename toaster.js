@@ -1,5 +1,4 @@
 class Toaster {
-    // --- CONTROL PANEL ---
     static SETTINGS = {
         REDIRECT_MS: 3000,
         STAY_CONFIRM_MS: 2000,
@@ -31,7 +30,11 @@ class Toaster {
         const isSuccess = type === 'success';
         const toast = document.createElement('div');
         
+        // 6. Accessibility & Class Scoping
         toast.className = `toaster-toast toaster-toast--${type}`;
+        toast.setAttribute('role', isSuccess ? 'status' : 'alert');
+        toast.setAttribute('aria-live', isSuccess ? 'polite' : 'assertive');
+        
         toast._timers = []; 
 
         toast.innerHTML = `
@@ -44,37 +47,37 @@ class Toaster {
                     </div>
                 </div>
                 <div class="toaster-actions"></div>
-                <button class="toaster-close" aria-label="Close">&times;</button>
+                <button class="toaster-close" aria-label="Close Toast">&times;</button>
             </div>
             <div class="toaster-progress-bar"></div>
         `;
 
-        // Defensive/Secure Text Injection
-        const messageEl = toast.querySelector('.toaster-message');
-        if (messageEl) messageEl.textContent = message;
+        // 1. Strict XSS Prevention (No innerHTML for dynamic content)
+        toast.querySelector('.toaster-message').textContent = message;
 
         const bar = toast.querySelector('.toaster-progress-bar');
 
         if (redirectUrl) {
             const subtext = toast.querySelector('.toaster-subtext');
-            if (subtext) {
-                subtext.style.display = 'block';
-                subtext.innerHTML = `Redirecting in <span class="toast-count">${this.SETTINGS.COUNTDOWN_START}</span>s...`;
-            }
+            subtext.style.display = 'block';
+            
+            // Securely build subtext DOM
+            const countSpan = document.createElement('span');
+            countSpan.className = 'toast-count';
+            countSpan.textContent = this.SETTINGS.COUNTDOWN_START;
+            subtext.textContent = 'Redirecting in ';
+            subtext.append(countSpan, 's...');
             
             const cancelBtn = document.createElement('button');
-            cancelBtn.className = 'toaster-btn toast-cancel-trigger';
+            cancelBtn.className = 'toaster-btn';
             cancelBtn.textContent = 'Stay Here';
-            
-            const actions = toast.querySelector('.toaster-actions');
-            if (actions) actions.appendChild(cancelBtn);
+            toast.querySelector('.toaster-actions').appendChild(cancelBtn);
 
             let timeLeft = this.SETTINGS.COUNTDOWN_START;
-            const countEl = toast.querySelector('.toast-count');
             
             const textInterval = setInterval(() => {
                 timeLeft--;
-                if (countEl) countEl.textContent = timeLeft;
+                if (countSpan) countSpan.textContent = timeLeft;
                 if (timeLeft <= 0) clearInterval(textInterval);
             }, 1000);
             toast._timers.push(textInterval);
@@ -86,10 +89,8 @@ class Toaster {
 
             if (bar) bar.style.transitionDuration = `${this.SETTINGS.REDIRECT_MS}ms`;
             
-            // DEFENSIVE GUARD: Ensure button exists before binding
-            if (cancelBtn) {
-                cancelBtn.onclick = () => this._toStayState(toast);
-            }
+            // 4. Proper Event Listeners
+            cancelBtn.addEventListener('click', () => this._toStayState(toast));
         } else {
             const expiryTimer = setTimeout(() => this._coolDown(toast), this.SETTINGS.AUTO_CLOSE_MS);
             toast._timers.push(expiryTimer);
@@ -105,25 +106,24 @@ class Toaster {
         }
 
         const closeBtn = toast.querySelector('.toaster-close');
-        if (closeBtn) closeBtn.onclick = () => this._coolDown(toast);
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this._coolDown(toast));
+        }
     }
 
     static _toStayState(toast) {
         this._clearInstanceTimers(toast);
         
-        toast.style.backgroundColor = 'var(--toaster-cancel, #2563eb)';
+        // 3. Presentation via CSS Class, not inline styles
+        toast.classList.remove('toaster-toast--success', 'toaster-toast--error');
+        toast.classList.add('toaster-toast--cancelled');
         
         const bar = toast.querySelector('.toaster-progress-bar');
         if (bar) bar.style.display = 'none';
         
-        const msg = toast.querySelector('.toaster-message');
-        if (msg) msg.textContent = 'Redirect Cancelled';
-        
+        toast.querySelector('.toaster-message').textContent = 'Redirect Cancelled';
         const sub = toast.querySelector('.toaster-subtext');
-        if (sub) {
-            sub.textContent = "You're staying here!";
-            sub.style.display = 'block';
-        }
+        if (sub) sub.textContent = "You're staying here!";
         
         const actions = toast.querySelector('.toaster-actions');
         if (actions) actions.innerHTML = '';
@@ -148,13 +148,21 @@ class Toaster {
 
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(30px)';
+        
         setTimeout(() => {
-            if (toast.parentNode) toast.remove();
+            if (toast.parentNode) {
+                toast.remove();
+                // 2. Container Lifecycle Management
+                if (this._container && !this._container.children.length) {
+                    this._container.remove();
+                    this._container = null;
+                }
+            }
         }, this.SETTINGS.FADE_MS);
     }
 }
 
-// Injected Styles
+// 5. Clamped Layout & Variables Injected Styles
 (function injectStyles() {
     if (document.getElementById('toaster-css')) return;
     const style = document.createElement('style');
@@ -183,19 +191,27 @@ class Toaster {
         }
         .toaster-toast--success { background-color: var(--toaster-success); }
         .toaster-toast--error { background-color: var(--toaster-error); }
+        .toaster-toast--cancelled { background-color: var(--toaster-cancel); }
+
         .toaster-content { display: flex; align-items: center; justify-content: space-between; gap: 15px; position: relative; z-index: 10; }
-        .toaster-body { display: flex; align-items: center; gap: 12px; flex: 1; }
-        .toaster-message { font-weight: 600; margin: 0; font-size: 0.95rem; }
+        .toaster-body { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+        
+        /* 5. Clamped Layout for insane message lengths */
+        .toaster-message { 
+            font-weight: 600; margin: 0; font-size: 0.95rem; 
+            max-height: 4.5em; overflow: hidden; 
+            display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+        }
+        
         .toaster-subtext { margin: 0; font-size: 0.8rem; opacity: 0.9; }
         .toaster-btn {
             background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3);
             color: var(--toaster-text); border-radius: 4px; padding: 4px 8px;
             font-size: 0.75rem; cursor: pointer; white-space: nowrap; transition: background 0.2s;
         }
-        .toaster-btn:hover { background: rgba(255,255,255,0.3); }
         .toaster-close {
-            background: none; border: none; color: var(--toaster-text); font-size: 1.25rem;
-            cursor: pointer; opacity: 0.7; padding: 0 0 0 5px; line-height: 1;
+            background: none; border: none; color: var(--toaster-text); font-size: 1.5rem;
+            cursor: pointer; opacity: 0.7; padding: 0; line-height: 1;
         }
         .toaster-progress-bar {
             position: absolute; bottom: 0; left: 0; height: 3px; width: 100%;
